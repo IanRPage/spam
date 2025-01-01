@@ -1,8 +1,9 @@
 use super::process::Process;
 use std::{
     collections::HashMap,
+    fmt::Write as _,
     fs,
-    io::{self, Write},
+    io::{self, Write as _},
 };
 
 #[derive(Debug)]
@@ -107,34 +108,26 @@ impl System {
         self.proc_map.retain(|&pid, _| pids.contains(&pid));
     }
 
-    // pub fn display(&self) {
-    //     println!("CPU Usage: {:.2}%", self.cpu_usage);
-    //     println!("Memory Total: {} kB", self.mem_total);
-    //     println!("Memory Free: {} kB", self.mem_free);
-    //     println!("Swap Total: {} kB", self.swap_total);
-    //     println!("Swap Free: {} kB", self.swap_free);
-    //     println!("PID\tCOMMAND\tSTATE\tVSIZE\tRSS");
-    //     for (_, proc) in &self.proc_map {
-    //         println!(
-    //             "{}\t{}\t{}\t{}\t{}",
-    //             proc.pid, proc.command, proc.state, proc.vsize, proc.rss
-    //         );
-    //     }
-    // }
-    pub fn display(&self) {
-        let stdout = io::stdout();
-        let mut handle = stdout.lock();
-        writeln!(handle, "CPU%: {}%", self.cpu_usage).unwrap();
-        writeln!(handle, "Mem Total: {} kB\tMem Free: {} kB", self.mem_total, self.mem_free).unwrap();
-        writeln!(handle, "Swap Total: {} kB\tSwap Free: {} kB", self.swap_total, self.swap_free).unwrap();
-        writeln!(handle, "{:<10} {:<7} {:<15} {:<15} {:<15}", "PID", "STATE", "VSIZE", "RSS", "COMMAND").unwrap();
+    pub fn display(&self) {  // using String buffer with fmt::Write trait
+        let mut buf = String::new();
+
+        buf.write_str("\x1B[2J\x1B[H").unwrap();
+
+        writeln!(buf, "CPU%: {}%", self.cpu_usage).unwrap();
+        writeln!(buf, "Mem Total: {} kB\tMem Free: {} kB", self.mem_total, self.mem_free).unwrap();
+        writeln!(buf, "Swap Total: {} kB\tSwap Free: {} kB", self.swap_total, self.swap_free).unwrap();
+        writeln!(buf, "{:<10} {:<7} {:<15} {:<15} {:<15}", "PID", "STATE", "VSIZE", "RSS", "COMMAND").unwrap();
         for (_, proc) in &self.proc_map {
             writeln!(
-                handle,
+                buf,
                 "{:<10} {:<7} {:<15} {:<15} {:<15}",
                 proc.pid, proc.state, proc.vsize, proc.rss, proc.command
             )
             .unwrap();
         }
+        let stdout = io::stdout();
+        let mut handle = stdout.lock();
+        write!(handle, "{}", buf).unwrap();
+        handle.flush().unwrap();
     }
 }
