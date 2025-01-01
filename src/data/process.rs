@@ -4,5 +4,5 @@ pub struct Process {
     pub(crate) command: String,
     pub(crate) state: String,
     pub(crate) vsize: u64,
-    pub(crate) rss: u64,
+    pub(crate) rss: i64,
 }

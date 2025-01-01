@@ -5,6 +5,8 @@ use std::{
     fs,
     io::{self, Write as _},
 };
+use libc::{self, _SC_PAGESIZE};
+
 
 #[derive(Debug)]
 pub struct System {
@@ -14,6 +16,7 @@ pub struct System {
     swap_total: u32,
     swap_free: u32,
     proc_map: HashMap<u32, Process>,
+    page_size: i64,
 }
 
 impl System {
@@ -25,6 +28,7 @@ impl System {
             swap_total: 0,
             swap_free: 0,
             proc_map: HashMap::new(),
+            page_size: unsafe { libc::sysconf(_SC_PAGESIZE) },
         }
     }
 
@@ -82,8 +86,8 @@ impl System {
                             let parts: Vec<&str> = proc_stats.trim_end().split(" ").collect();
                             let command = parts[1][1..parts[1].len() - 1].to_string();
                             let state = parts[2].to_string();
-                            let vsize = parts[22].parse::<u64>().unwrap();
-                            let rss = parts[23].parse::<u64>().unwrap();
+                            let vsize = parts[22].parse::<u64>().unwrap() / 1024;
+                            let rss = parts[23].parse::<i64>().unwrap() * self.page_size / 1024;
                             self.proc_map
                                 .entry(pid)
                                 .and_modify(|proc| {
@@ -114,8 +118,8 @@ impl System {
         buf.write_str("\x1B[H\x1B[J").unwrap();
 
         writeln!(buf, "CPU%: {}%", self.cpu_usage).unwrap();
-        writeln!(buf, "Mem Total: {} kB\tMem Free: {} kB", self.mem_total, self.mem_free).unwrap();
-        writeln!(buf, "Swap Total: {} kB\tSwap Free: {} kB", self.swap_total, self.swap_free).unwrap();
+        writeln!(buf, "Mem Total: {} KiB\t\tMem Free: {} KiB", self.mem_total, self.mem_free).unwrap();
+        writeln!(buf, "Swap Total: {} KiB\t\tSwap Free: {} KiB", self.swap_total, self.swap_free).unwrap();
         writeln!(buf, "{:<10} {:<7} {:<15} {:<15} {:<15}", "PID", "STATE", "VSIZE", "RSS", "COMMAND").unwrap();
         for (_, proc) in &self.proc_map {
             writeln!(
