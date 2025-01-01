@@ -108,10 +108,10 @@ impl System {
         self.proc_map.retain(|&pid, _| pids.contains(&pid));
     }
 
-    pub fn display(&self) {  // using String buffer with fmt::Write trait
+    pub fn display(&self) {
         let mut buf = String::new();
 
-        buf.write_str("\x1B[2J\x1B[H").unwrap();
+        buf.write_str("\x1B[H\x1B[J").unwrap();
 
         writeln!(buf, "CPU%: {}%", self.cpu_usage).unwrap();
         writeln!(buf, "Mem Total: {} kB\tMem Free: {} kB", self.mem_total, self.mem_free).unwrap();

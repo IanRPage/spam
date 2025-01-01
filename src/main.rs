@@ -1,7 +1,6 @@
-use spam::data::system::System;
+use spam::ui::app::App;
 
 fn main() {
-    let mut sys = System::new();
-    sys.update_sys();
-    sys.display();
+    let mut app = App::new();
+    app.run();
 }
