@@ -1,12 +1,11 @@
 use super::process::Process;
+use libc::{self, _SC_PAGESIZE};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fmt::Write as _,
     fs,
     io::{self, Write as _},
 };
-use libc::{self, _SC_PAGESIZE};
-
 
 #[derive(Debug)]
 pub struct System {
@@ -17,6 +16,12 @@ pub struct System {
     swap_free: u32,
     proc_map: HashMap<u32, Process>,
     page_size: i64,
+}
+
+impl Default for System {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl System {
@@ -33,78 +38,72 @@ impl System {
     }
 
     pub fn update_sys(&mut self) {
-        // update cpu usage
-        let stat = fs::read_to_string("/proc/stat").unwrap();
-        let stat: Vec<String> = stat
-            .lines()
-            .map(|line| {
-                if line.starts_with("cpu") {
-                    line.split_whitespace()
-                        .skip(1)
-                        .collect::<Vec<&str>>()
-                        .join(" ")
-                } else {
-                    line.to_string()
-                }
-            })
-            .collect();
-        let cpu = &stat[0];
-        let cpu: Vec<u32> = cpu.split(" ").map(|n| n.parse::<u32>().unwrap()).collect();
-        let active = &cpu[0..3].iter().sum::<u32>() + &cpu[4..].iter().sum::<u32>();
-        let total: u32 = cpu.iter().sum();
-        let usage = (active as f64 / total as f64) * 100.0;
-        self.cpu_usage = format!("{:.3}", usage).parse::<f64>().unwrap();
+        self.refresh_cpu_usage();
+        self.refresh_memory();
+        self.refresh_proc_list();
+    }
 
-        // update memory
+    fn refresh_cpu_usage(&mut self) {
+        let stat = fs::read_to_string("/proc/stat").unwrap();
+        let cpu_line = stat
+            .lines()
+            .find(|line| line.starts_with("cpu"))
+            .expect("Unable to find cpu line");
+        let cpu: Vec<u32> = cpu_line
+            .split_whitespace()
+            .skip(1)
+            .map(|val| val.parse().unwrap_or(0))
+            .collect();
+        let (active, total) = cpu
+            .iter()
+            .enumerate()
+            .fold((0, 0), |(active, total), (i, &val)| {
+                let total = total + val;
+                let active = if i != 3 { active + val } else { active };
+                (active, total)
+            });
+        let usage = (active as f64 / total as f64) * 100.0;
+        self.cpu_usage = format!("{usage:.3}").parse().unwrap_or(0.0);
+    }
+
+    fn refresh_memory(&mut self) {
         let meminfo = fs::read_to_string("/proc/meminfo").unwrap();
         for line in meminfo.lines() {
-            let parts = line.split_whitespace().collect::<Vec<_>>();
-            match parts[0] {
-                "MemTotal:" => self.mem_total = parts[1].parse::<u32>().unwrap(),
-                "MemFree:" => self.mem_free = parts[1].parse::<u32>().unwrap(),
-                "SwapTotal:" => self.swap_total = parts[1].parse::<u32>().unwrap(),
-                "SwapFree:" => self.swap_free = parts[1].parse::<u32>().unwrap(),
-                _ => continue,
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if let [data, val, ..] = parts.as_slice() {
+                match *data {
+                    "MemTotal:" => self.mem_total = val.parse::<u32>().unwrap(),
+                    "MemFree:" => self.mem_free = val.parse::<u32>().unwrap(),
+                    "SwapTotal:" => self.swap_total = val.parse::<u32>().unwrap(),
+                    "SwapFree:" => self.swap_free = val.parse::<u32>().unwrap(),
+                    _ => continue,
+                }
             }
         }
+    }
 
-        // update proc list
-        let entries = if let Ok(contents) = fs::read_dir("/proc") {
-            contents
-        } else {
-            return;
-        };
-        let mut pids: Vec<u32> = Vec::new();
-
-        for entry in entries {
-            if let Ok(entry) = entry {
-                let path = entry.path();
-                if let Some(fname) = path.file_name().and_then(|name| name.to_str()) {
-                    if let Ok(pid) = fname.parse::<u32>() {
-                        pids.push(pid);
-                        if let Ok(proc_stats) = fs::read_to_string(format!("/proc/{}/stat", pid)) {
-                            let parts: Vec<&str> = proc_stats.trim_end().split(" ").collect();
-                            let command = parts[1][1..parts[1].len() - 1].to_string();
-                            let state = parts[2].to_string();
-                            let vsize = parts[22].parse::<u64>().unwrap() / 1024;
-                            let rss = parts[23].parse::<i64>().unwrap() * self.page_size / 1024;
-                            self.proc_map
-                                .entry(pid)
-                                .and_modify(|proc| {
-                                    proc.pid = pid;
-                                    proc.command = command.clone();
-                                    proc.state = state.clone();
-                                    proc.vsize = vsize;
-                                    proc.rss = rss;
-                                })
-                                .or_insert(Process {
-                                    pid,
-                                    command,
-                                    state,
-                                    vsize,
-                                    rss,
-                                });
-                        }
+    fn refresh_proc_list(&mut self) {
+        let mut pids = HashSet::new();
+        for entry in fs::read_dir("/proc").unwrap() {
+            let entry = entry.unwrap();
+            if let Some(fname) = entry.file_name().to_str() {
+                if let Ok(pid) = fname.parse::<u32>() {
+                    pids.insert(pid);
+                    let path = entry.path();
+                    if let Ok(proc_stats) = fs::read_to_string(path.join("stat")) {
+                        let parts: Vec<&str> = proc_stats.trim_end().split(" ").collect();
+                        let command = parts[1][1..parts[1].len() - 1].to_string();
+                        let state = parts[2].to_string();
+                        let vsize = parts[22].parse::<u64>().unwrap() / 1024;
+                        let rss = parts[23].parse::<i64>().unwrap() * self.page_size / 1024;
+                        self.proc_map
+                            .entry(pid)
+                            .and_modify(|proc| {
+                                proc.command = command.clone();
+                                proc.state = state.clone();
+                                proc.vsize = vsize;
+                                proc.rss = rss;
+                            }).or_insert(Process { pid, command, state, vsize, rss });
                     }
                 }
             }
@@ -118,10 +117,25 @@ impl System {
         buf.write_str("\x1B[H\x1B[J").unwrap();
 
         writeln!(buf, "CPU%: {}%", self.cpu_usage).unwrap();
-        writeln!(buf, "Mem Total: {} KiB\t\tMem Free: {} KiB", self.mem_total, self.mem_free).unwrap();
-        writeln!(buf, "Swap Total: {} KiB\t\tSwap Free: {} KiB", self.swap_total, self.swap_free).unwrap();
-        writeln!(buf, "{:<10} {:<7} {:<15} {:<15} {:<15}", "PID", "STATE", "VSIZE", "RSS", "COMMAND").unwrap();
-        for (_, proc) in &self.proc_map {
+        writeln!(
+            buf,
+            "Mem Total: {} KiB\t\tMem Free: {} KiB",
+            self.mem_total, self.mem_free
+        )
+        .unwrap();
+        writeln!(
+            buf,
+            "Swap Total: {} KiB\t\tSwap Free: {} KiB",
+            self.swap_total, self.swap_free
+        )
+        .unwrap();
+        writeln!(
+            buf,
+            "{:<10} {:<7} {:<15} {:<15} {:<15}",
+            "PID", "STATE", "VSIZE", "RSS", "COMMAND"
+        )
+        .unwrap();
+        for proc in self.proc_map.values() {
             writeln!(
                 buf,
                 "{:<10} {:<7} {:<15} {:<15} {:<15}",
