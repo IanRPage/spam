@@ -15,6 +15,7 @@ impl DataMonitor for ProcessMonitor {
         }
     }
 
+    /// Fetches and updates process (threads) map, also returns total number of threads.
     fn fetch(&mut self, src: &System) {
         let mut pids = HashSet::new();
         for (pid, process) in src.processes() {
